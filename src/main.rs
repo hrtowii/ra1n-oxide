@@ -6,10 +6,29 @@ use std::thread::sleep;
 use std::time::Duration;
 use tokio;
 
+// MARK: constants
+pub const DFU_DNLOAD: u8 = 1;
+pub const DFU_UPLOAD: u8 = 2;
+pub const DFU_GETSTATUS: u8 = 3;
+pub const DFU_CLRSTATUS: u8 = 4;
+pub const DFU_GETSTATE: u8 = 5;
+pub const DFU_ABORT: u8 = 6;
+pub const DFU_FILE_SUFFIX_LENGTH: usize = 16;
+pub const EP0_MAX_PACKET_SIZE: u16 = 0x40;
+pub const DFU_MAX_TRANSFER_SIZE: u16 = 0x800;
+pub const DFU_STATUS_OK: u8 = 0;
+pub const DFU_STATE_MANIFEST_SYNC: u8 = 6;
+pub const DFU_STATE_MANIFEST: u8 = 7;
+pub const DFU_STATE_MANIFEST_WAIT_RESET: u8 = 8;
+
+// USB constants
+pub const USB_TIMEOUT: u32 = 10;
+
 // 0x5ac, 0x1227 -> dfu
 // 0x5ac, 0x1281 -> recovery
 // 0x5ac, 0x4141 -> pongo
 
+// MARK: device detection
 async fn find_apple_device() -> Option<rusb::DeviceHandle<rusb::Context>> {
     let context = rusb::Context::new().unwrap();
     let device_list = context.devices().unwrap();
@@ -17,12 +36,12 @@ async fn find_apple_device() -> Option<rusb::DeviceHandle<rusb::Context>> {
         let device_handle = device.open().unwrap();
         let device_descriptor = device_handle.device().device_descriptor().unwrap();
         if device_descriptor.vendor_id() == 0x5ac && device_descriptor.vendor_id() != 0x1227 && device_descriptor.vendor_id() != 0x1281 && device_descriptor.vendor_id() != 0x4141 {
+            sleep(Duration::from_millis(800));
             return Some(device_handle);
         }
     }
     return None;
 }
-
 
 async fn find_device(mode: &str, device_descriptor: &DeviceDescriptor) -> bool {
     if device_descriptor.vendor_id() != 0x5ac {
@@ -123,6 +142,27 @@ fn get_bdid_from_serial(serial: &str) -> &str {
     return &bdid;
 }
 
+fn send_command_to_recovery(usb_handle: &rusb::DeviceHandle<rusb::Context>, command: &str) {
+    if command.len() <= 0x100 && command.len() > 1 {
+        let unsafe_handle = usb_handle.as_raw();
+        unsafe {
+            libusb_control_transfer(
+                unsafe_handle,
+                0x40,
+                1,
+                0,
+                0,
+                command.as_ptr() as *mut u8,
+                (command.len() + 1).try_into().unwrap(),
+                USB_TIMEOUT,
+            );
+        }
+    } else {
+        println!("Invalid command length");
+    }
+}
+
+// MARK: dfu helper
 fn dfu_helper(usb_handle: &rusb::DeviceHandle<rusb::Context>) {
     let device_descriptor = usb_handle.device().device_descriptor().unwrap();
     let serial_number = usb_handle.read_serial_number_string_ascii(&device_descriptor).unwrap();
@@ -155,26 +195,6 @@ fn dfu_helper(usb_handle: &rusb::DeviceHandle<rusb::Context>) {
     }
 }
 
-fn send_command_to_recovery(usb_handle: &rusb::DeviceHandle<rusb::Context>, command: &str) {
-    if command.len() <= 0x100 && command.len() > 1 {
-        let unsafe_handle = usb_handle.as_raw();
-        unsafe {
-            libusb_control_transfer(
-                unsafe_handle,
-                0x40,
-                1,
-                0,
-                0,
-                command.as_ptr() as *mut u8,
-                (command.len() + 1).try_into().unwrap(),
-                10,
-            );
-        }
-    } else {
-        println!("Invalid command length");
-    }
-}
-
 async fn kick_into_recovery() -> bool {
     match find_device_in_dfu().await {
         None => {
@@ -197,8 +217,41 @@ async fn kick_into_recovery() -> bool {
     return false;
 }
 
+// MARK: usb stuff
 fn reset_device(usb_handle: &rusb::DeviceHandle<rusb::Context>) {
-    println!("Resetting device");
+    println!("Resetting device for checkm8");
+    let unsafe_handle = usb_handle.as_raw();
+    unsafe {
+        let mut ret = libusb_control_transfer(
+            unsafe_handle,
+             0x21,
+              DFU_DNLOAD,
+              0,
+              0,
+              std::ptr::null_mut(),
+              DFU_FILE_SUFFIX_LENGTH.try_into().unwrap(),
+              USB_TIMEOUT,
+             );
+        // send_usb_control_request_no_data(handle, 0x21, DFU_DNLOAD, 0, 0, DFU_FILE_SUFFIX_LENGTH, &transferRet);
+        
+    // Send zero length packet to end existing transfer
+
+    // Request image validation like we are about to boot it
+    
+    // Start a new DFU transfer
+    ret = libusb_control_transfer(unsafe_handle,
+         0x21,
+          DFU_DNLOAD,
+           0,
+            0,
+             std::ptr::null_mut(),
+              DFU_FILE_SUFFIX_LENGTH.try_into().unwrap(),
+               USB_TIMEOUT
+            ); 
+
+    // Ready
+    // return true;
+    }
 }
 
 fn heap_fengshui(usb_handle: &rusb::DeviceHandle<rusb::Context>) {
@@ -243,42 +296,6 @@ fn overwrite(usb_handle: &rusb::DeviceHandle<rusb::Context>) {
 fn send_payload(usb_handle: &rusb::DeviceHandle<rusb::Context>) {
     println!("stage 3.5: send payload");
 }
-
-// async fn async_main() {
-    // // Asynchronously wait for device detections
-    // let find_device_in_dfu_task = find_device_in_dfu();
-    // let find_device_in_recovery_task = find_device_in_recovery();
-    // let find_apple_device_task = find_apple_device();
-
-    // // Use tokio::select! to wait for all tasks concurrently
-    // tokio::select! {
-    //     Some(device) = find_device_in_dfu_task => {
-    //         let device_handle = device.open().unwrap();
-    //         dfu_helper(&device_handle);
-    //         reset_device(&device_handle);
-    //         heap_fengshui(&device_handle);
-    //         trigger_uaf(&device_handle);
-    //         overwrite(&device_handle);
-    //         send_payload(&device_handle);
-    //     }
-    //     _ = find_device_in_recovery_task => {
-    //         if kick_into_recovery() {
-    //             if let Some(our_phone) = find_apple_device_task.await {
-    //                 dfu_helper(&our_phone);
-    //             }
-    //         }
-    //     }
-    //     _ = find_apple_device_task => {
-    //         if let Some(our_phone) = find_apple_device_task.await {
-    //             dfu_helper(&our_phone);
-    //         }
-    //     }
-    //     else => {
-    //         // Handle the case where none of the tasks succeed
-    //         println!("Device detection failed.");
-    //     }
-    // }
-// }
 
 #[tokio::main]
 async fn main() {
