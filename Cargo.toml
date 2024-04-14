@@ -8,3 +8,4 @@ edition = "2021"
 [dependencies]
 rusb = "0.9"
 rusty_libimobiledevice="0.1.7"
+tokio = { version = "1.37.0", features = ["rt-multi-thread", "macros"] }

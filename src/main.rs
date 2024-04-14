@@ -1,29 +1,30 @@
-use rusb::ffi::libusb_control_transfer;
-use rusb::{self, DeviceDescriptor, DeviceHandle, UsbContext};
+use rusb::ffi::{libusb_control_transfer, libusb_error_name, libusb_strerror};
+use rusb::{self, DeviceDescriptor, UsbContext};
 use rusty_libimobiledevice::idevice;
 use rusty_libimobiledevice::services::lockdownd;
 use std::thread::sleep;
 use std::time::Duration;
+use tokio;
 
 // 0x5ac, 0x1227 -> dfu
 // 0x5ac, 0x1281 -> recovery
 // 0x5ac, 0x4141 -> pongo
 
-fn find_apple_device() -> Option<rusb::DeviceHandle<rusb::Context>> {
+async fn find_apple_device() -> Option<rusb::DeviceHandle<rusb::Context>> {
     let context = rusb::Context::new().unwrap();
     let device_list = context.devices().unwrap();
     for device in device_list.iter() {
-        let device_handle = device.open().unwrap(); // Open the device handle
-        let device_descriptor = device_handle.device().device_descriptor().unwrap(); // Get the device descriptor from the device handle
-        if device_descriptor.vendor_id() == 0x5ac {
-            return Some(device_handle); // Return the device handle instead of cloning the device
+        let device_handle = device.open().unwrap();
+        let device_descriptor = device_handle.device().device_descriptor().unwrap();
+        if device_descriptor.vendor_id() == 0x5ac && device_descriptor.vendor_id() != 0x1227 && device_descriptor.vendor_id() != 0x1281 && device_descriptor.vendor_id() != 0x4141 {
+            return Some(device_handle);
         }
     }
     return None;
 }
 
 
-fn find_device(mode: &str, device_descriptor: &DeviceDescriptor) -> bool {
+async fn find_device(mode: &str, device_descriptor: &DeviceDescriptor) -> bool {
     if device_descriptor.vendor_id() != 0x5ac {
         // just bail if not apple
         return false;
@@ -56,34 +57,35 @@ fn find_device(mode: &str, device_descriptor: &DeviceDescriptor) -> bool {
     return false;
 }
 
-fn find_device_in_dfu() -> Option<rusb::Device<rusb::Context>> {
+async fn find_device_in_dfu() -> Option<rusb::Device<rusb::Context>> {
     let context = rusb::Context::new().unwrap();
     let device_list = context.devices().unwrap();
     for device in device_list.iter() {
         let device_desc = device.device_descriptor().unwrap();
-        if find_device("dfu", &device_desc) == true {
+        if find_device("dfu", &device_desc).await == true {
             return Some(device.clone());
         }
     }
     return None;
 }
 
-fn find_device_in_recovery() -> bool {
+async fn find_device_in_recovery() -> Option<rusb::Device<rusb::Context>> {
     let context = rusb::Context::new().unwrap();
     let device_list = context.devices().unwrap();
     for device in device_list.iter() {
         let device_desc = device.device_descriptor().unwrap();
-        if find_device("recovery", &device_desc) == true {
-            return true;
+        if find_device("recovery", &device_desc).await == true {
+            return Some(device.clone());
         }
     }
-    return false;
+    return None;
 }
 
-fn timer(seconds: u64, what_to_say: &str) {
+fn timer(mut seconds: u64, what_to_say: &str) {
     while seconds > 0 {
         println!("\r{} {}", seconds, what_to_say);
         sleep(Duration::from_secs(1));
+        seconds -= 1;
     }
 }
 
@@ -145,8 +147,11 @@ fn dfu_helper(usb_handle: &rusb::DeviceHandle<rusb::Context>) {
     sleep(Duration::from_millis(100));
     send_command_to_recovery(usb_handle, "reboot");
 
-    while (find_device_in_dfu() == None) {
-        
+    if (is_home_button) {
+        timer(10, "Hold down home button only");
+
+    } else {
+        timer(10, "Hold down volume button only")
     }
 }
 
@@ -170,8 +175,8 @@ fn send_command_to_recovery(usb_handle: &rusb::DeviceHandle<rusb::Context>, comm
     }
 }
 
-fn kick_into_recovery() -> bool {
-    match find_device_in_dfu() {
+async fn kick_into_recovery() -> bool {
+    match find_device_in_dfu().await {
         None => {
             println!("No device in DFU, kicking into recovery");
         }
@@ -185,16 +190,7 @@ fn kick_into_recovery() -> bool {
     if let Ok(client) = ret {
         let _ = lockdownd::LockdowndClient::enter_recovery(&client);
     }
-    // TODO: add another thread to check if device is in recovery, because this is blocking
-    let mut counter = 0;
-    while find_device_in_recovery() == false {
-        sleep(Duration::from_secs(1));
-        counter += 1;
-        if counter > 30 {
-            break;
-        }
-    }
-    if find_device_in_recovery() {
+    if find_device_in_recovery().await.is_some() {
         return true;
     }
     println!("Failed to kick into recovery");
@@ -248,24 +244,68 @@ fn send_payload(usb_handle: &rusb::DeviceHandle<rusb::Context>) {
     println!("stage 3.5: send payload");
 }
 
-fn main() {
-    if let Some(device) = find_device_in_dfu() {
-        // println!("Device in DFU mode");
-        let device_handle = device.open().unwrap();
-        dfu_helper(&device_handle);
-        reset_device(&device_handle);
-        heap_fengshui(&device_handle);
-        trigger_uaf(&device_handle);
-        overwrite(&device_handle);
-        send_payload(&device_handle);
-    } else if !find_device_in_recovery() {
-        if kick_into_recovery() {
-            let our_phone = find_apple_device().unwrap();
-            dfu_helper(&our_phone);
+// async fn async_main() {
+    // // Asynchronously wait for device detections
+    // let find_device_in_dfu_task = find_device_in_dfu();
+    // let find_device_in_recovery_task = find_device_in_recovery();
+    // let find_apple_device_task = find_apple_device();
+
+    // // Use tokio::select! to wait for all tasks concurrently
+    // tokio::select! {
+    //     Some(device) = find_device_in_dfu_task => {
+    //         let device_handle = device.open().unwrap();
+    //         dfu_helper(&device_handle);
+    //         reset_device(&device_handle);
+    //         heap_fengshui(&device_handle);
+    //         trigger_uaf(&device_handle);
+    //         overwrite(&device_handle);
+    //         send_payload(&device_handle);
+    //     }
+    //     _ = find_device_in_recovery_task => {
+    //         if kick_into_recovery() {
+    //             if let Some(our_phone) = find_apple_device_task.await {
+    //                 dfu_helper(&our_phone);
+    //             }
+    //         }
+    //     }
+    //     _ = find_apple_device_task => {
+    //         if let Some(our_phone) = find_apple_device_task.await {
+    //             dfu_helper(&our_phone);
+    //         }
+    //     }
+    //     else => {
+    //         // Handle the case where none of the tasks succeed
+    //         println!("Device detection failed.");
+    //     }
+    // }
+// }
+
+#[tokio::main]
+async fn main() {
+    let find_device_in_dfu_task = find_device_in_dfu();
+    let find_device_in_recovery_task = find_device_in_recovery();
+    let find_apple_device_task = find_apple_device();
+
+    tokio::select! {
+        Some(device) = find_device_in_dfu_task => {
+            let device_handle = device.open().unwrap();
+            reset_device(&device_handle);
+            heap_fengshui(&device_handle);
+            trigger_uaf(&device_handle);
+            overwrite(&device_handle);
+            send_payload(&device_handle);
         }
-    } else {
-        // println!("Device in recovery mode");
-        let our_phone = find_apple_device().unwrap();
-        dfu_helper(&our_phone);
+        Some(device) = find_device_in_recovery_task => {
+            let device_handle = device.open().unwrap();
+            dfu_helper(&device_handle);
+        }
+        Some(device) = find_apple_device_task => {
+            kick_into_recovery().await;
+            dfu_helper(&device);
+        }
+        else => {
+            // Handle the case where none of the tasks succeed
+            println!("Device detection failed.");
+        }
     }
 }
