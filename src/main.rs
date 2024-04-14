@@ -35,8 +35,12 @@ async fn find_apple_device() -> Option<rusb::DeviceHandle<rusb::Context>> {
     for device in device_list.iter() {
         let device_handle = device.open().unwrap();
         let device_descriptor = device_handle.device().device_descriptor().unwrap();
-        if device_descriptor.vendor_id() == 0x5ac && device_descriptor.vendor_id() != 0x1227 && device_descriptor.vendor_id() != 0x1281 && device_descriptor.vendor_id() != 0x4141 {
-            sleep(Duration::from_millis(800));
+        if device_descriptor.vendor_id() == 0x5ac
+            && device_descriptor.vendor_id() != 0x1227
+            && device_descriptor.vendor_id() != 0x1281
+            && device_descriptor.vendor_id() != 0x4141
+        {
+            // sleep(Duration::from_millis(100));
             return Some(device_handle);
         }
     }
@@ -120,7 +124,7 @@ release side buttom, keep holding voldown for 10 seconds
 cpid of no home:
 #define NOHOME (cpid == 0x8015 || (cpid == 0x8010 && (bdid == 0x08 || bdid == 0x0a || bdid == 0x0c || bdid == 0x0e)))
 
-Example serial number: 
+Example serial number:
 CPID:8010 <- Get by searching for CPID: and then getting the next 4 characters
  CPRV:11 CPFM:03 SCEP:01 BDID:08 <- Get by searching for BDID: and then getting the next 2 characters
  ECID:000269E20846003A IBFL:3C SRTG:[iBoot-2696.0.0.1.33]
@@ -130,7 +134,7 @@ fn get_cpid_from_serial(serial: &str) -> &str {
     let cpid_index = serial.find("CPID:").unwrap();
     // println!("CPID index: {}", cpid_index);
     let cpid = &serial[cpid_index + 5..cpid_index + 9]; // chatgpt did this for me please idk
-    // println!("CPID: {}", cpid);
+                                                        // println!("CPID: {}", cpid);
     return &cpid;
 }
 
@@ -138,7 +142,7 @@ fn get_bdid_from_serial(serial: &str) -> &str {
     let bdid_index = serial.find("BDID:").unwrap();
     // println!("BDID index: {}", bdid_index);
     let bdid = &serial[bdid_index + 5..bdid_index + 7]; // chatgpt did this for me please idk
-    // println!("BDID: {}", bdid);
+                                                        // println!("BDID: {}", bdid);
     return &bdid;
 }
 
@@ -165,11 +169,14 @@ fn send_command_to_recovery(usb_handle: &rusb::DeviceHandle<rusb::Context>, comm
 // MARK: dfu helper
 fn dfu_helper(usb_handle: &rusb::DeviceHandle<rusb::Context>) {
     let device_descriptor = usb_handle.device().device_descriptor().unwrap();
-    let serial_number = usb_handle.read_serial_number_string_ascii(&device_descriptor).unwrap();
+    let serial_number = usb_handle
+        .read_serial_number_string_ascii(&device_descriptor)
+        .unwrap();
     // println!("Serial number: {}", serial_number);
     let cpid = get_cpid_from_serial(&serial_number).parse::<u16>().unwrap();
     let bdid = get_bdid_from_serial(&serial_number).parse::<u16>().unwrap();
-    let is_home_button = (cpid == 0x8015 || (cpid == 0x8010 && (bdid == 0x08 || bdid == 0x0a || bdid == 0x0c || bdid == 0x0e)));
+    let is_home_button = (cpid == 0x8015
+        || (cpid == 0x8010 && (bdid == 0x08 || bdid == 0x0a || bdid == 0x0c || bdid == 0x0e)));
 
     println!("Press any character when you are ready to enter DFU");
     std::io::stdin().read_line(&mut String::new()).unwrap();
@@ -189,7 +196,6 @@ fn dfu_helper(usb_handle: &rusb::DeviceHandle<rusb::Context>) {
 
     if (is_home_button) {
         timer(10, "Hold down home button only");
-
     } else {
         timer(10, "Hold down volume button only")
     }
@@ -218,39 +224,72 @@ async fn kick_into_recovery() -> bool {
 }
 
 // MARK: usb stuff
-fn reset_device(usb_handle: &rusb::DeviceHandle<rusb::Context>) {
-    println!("Resetting device for checkm8");
+
+fn dfu_check_status(usb_handle: &rusb::DeviceHandle<rusb::Context>, status: u8, state: u8) {
     let unsafe_handle = usb_handle.as_raw();
     unsafe {
         let mut ret = libusb_control_transfer(
             unsafe_handle,
-             0x21,
-              DFU_DNLOAD,
-              0,
-              0,
-              std::ptr::null_mut(),
-              DFU_FILE_SUFFIX_LENGTH.try_into().unwrap(),
-              USB_TIMEOUT,
-             );
-        // send_usb_control_request_no_data(handle, 0x21, DFU_DNLOAD, 0, 0, DFU_FILE_SUFFIX_LENGTH, &transferRet);
-        
-    // Send zero length packet to end existing transfer
-
-    // Request image validation like we are about to boot it
-    
-    // Start a new DFU transfer
-    ret = libusb_control_transfer(unsafe_handle,
-         0x21,
-          DFU_DNLOAD,
-           0,
+            0x21,
+            DFU_DNLOAD,
             0,
-             std::ptr::null_mut(),
-              DFU_FILE_SUFFIX_LENGTH.try_into().unwrap(),
-               USB_TIMEOUT
-            ); 
+            0,
+            std::ptr::null_mut(),
+            DFU_FILE_SUFFIX_LENGTH.try_into().unwrap(),
+            USB_TIMEOUT,
+        );
+    }
+}
 
-    // Ready
-    // return true;
+fn reset_device(usb_handle: &rusb::DeviceHandle<rusb::Context>) {
+    println!("Resetting device for checkm8");
+    let unsafe_handle = usb_handle.as_raw();
+    unsafe {
+        println!("Send zlp to end existing trf");
+        let mut ret = libusb_control_transfer(
+            unsafe_handle,
+            0x21,
+            DFU_DNLOAD,
+            0,
+            0,
+            std::ptr::null_mut(),
+            16,
+            10
+        );
+        // send_usb_control_request_no_data(handle, 0x21, DFU_DNLOAD, 0, 0, DFU_FILE_SUFFIX_LENGTH, &transferRet);
+
+        // Send zero length packet to end existing transfer
+
+        println!("Request image validation");
+        // Request image validation like we are about to boot it
+        ret = libusb_control_transfer(
+            unsafe_handle,
+            0x21,
+            DFU_DNLOAD,
+            0,
+            0,
+            std::ptr::null_mut(), 
+            0, 
+            10, 
+        );
+        // return send_usb_control_request_no_data(handle, 0x21, DFU_DNLOAD, 0, 0, 0, &transfer_ret)
+
+        println!("Start a new DFU transfer");
+        // Start a new DFU transfer
+        ret = libusb_control_transfer(
+            unsafe_handle,
+            0x21,
+            DFU_DNLOAD,
+            0,
+            0,
+            std::ptr::null_mut(),
+            EP0_MAX_PACKET_SIZE,
+            10,
+        );
+        // ret = send_usb_control_request_no_data(handle, 0x21, DFU_DNLOAD, 0, 0, EP0_MAX_PACKET_SIZE, &transferRet);
+
+        // Ready
+        // return true;
     }
 }
 
@@ -261,16 +300,7 @@ fn heap_fengshui(usb_handle: &rusb::DeviceHandle<rusb::Context>) {
 fn send_abort(usb_handle: &rusb::DeviceHandle<rusb::Context>) {
     let unsafe_handle = usb_handle.as_raw();
     unsafe {
-        libusb_control_transfer(
-            unsafe_handle,
-            0x21,
-            0x4,
-            0,
-            0,
-            std::ptr::null_mut(),
-            0,
-            0
-        );
+        libusb_control_transfer(unsafe_handle, 0x21, 0x4, 0, 0, std::ptr::null_mut(), 0, 0);
     }
     // send_usb_control_request_no_data(handle, 0x21, 0x4, 0, 0, 0, NULL);
 }
