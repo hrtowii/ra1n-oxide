@@ -40,7 +40,7 @@ async fn find_apple_device() -> Option<rusb::DeviceHandle<rusb::Context>> {
             && device_descriptor.vendor_id() != 0x1281
             && device_descriptor.vendor_id() != 0x4141
         {
-            // sleep(Duration::from_millis(100));
+            sleep(Duration::from_millis(800));
             return Some(device_handle);
         }
     }
@@ -253,14 +253,13 @@ fn reset_device(usb_handle: &rusb::DeviceHandle<rusb::Context>) {
             0,
             0,
             std::ptr::null_mut(),
-            16,
-            10
+            DFU_FILE_SUFFIX_LENGTH.try_into().unwrap(),
+            USB_TIMEOUT,
         );
         // send_usb_control_request_no_data(handle, 0x21, DFU_DNLOAD, 0, 0, DFU_FILE_SUFFIX_LENGTH, &transferRet);
 
         // Send zero length packet to end existing transfer
 
-        println!("Request image validation");
         // Request image validation like we are about to boot it
         ret = libusb_control_transfer(
             unsafe_handle,
@@ -270,11 +269,10 @@ fn reset_device(usb_handle: &rusb::DeviceHandle<rusb::Context>) {
             0,
             std::ptr::null_mut(), 
             0, 
-            10, 
+            USB_TIMEOUT, 
         );
         // return send_usb_control_request_no_data(handle, 0x21, DFU_DNLOAD, 0, 0, 0, &transfer_ret)
 
-        println!("Start a new DFU transfer");
         // Start a new DFU transfer
         ret = libusb_control_transfer(
             unsafe_handle,
@@ -284,7 +282,7 @@ fn reset_device(usb_handle: &rusb::DeviceHandle<rusb::Context>) {
             0,
             std::ptr::null_mut(),
             EP0_MAX_PACKET_SIZE,
-            10,
+            USB_TIMEOUT,
         );
         // ret = send_usb_control_request_no_data(handle, 0x21, DFU_DNLOAD, 0, 0, EP0_MAX_PACKET_SIZE, &transferRet);
 
