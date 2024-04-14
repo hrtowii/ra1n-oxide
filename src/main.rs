@@ -2,6 +2,8 @@ use rusb::ffi::{libusb_control_transfer, libusb_error_name, libusb_strerror};
 use rusb::{self, DeviceDescriptor, UsbContext};
 use rusty_libimobiledevice::idevice;
 use rusty_libimobiledevice::services::lockdownd;
+use std::ffi::{c_uchar, c_uint, c_ushort, c_void};
+use std::ptr;
 use std::thread::sleep;
 use std::time::Duration;
 use tokio;
@@ -225,11 +227,77 @@ async fn kick_into_recovery() -> bool {
 
 // MARK: usb stuff
 
+fn send_usb_control_request_no_data(
+    handle: &rusb::DeviceHandle<rusb::Context>,
+    bm_request_type: u8,
+    b_request: u8,
+    w_value: u16,
+    w_index: u16,
+    w_length: usize,
+) -> bool {
+    // let mut transfer_ret: rusb::ControlTransferReturnStatus = rusb::ControlTransferReturnStatus::Ok;
+
+    if w_length == 0 {
+        send_usb_control_request(
+            handle,
+            bm_request_type,
+            b_request,
+            w_value,
+            w_index,
+            ptr::null_mut(),
+            0,
+        )
+    } else {
+        let mut data: *mut c_void = unsafe { std::alloc::alloc(std::alloc::Layout::from_size_align(w_length, 1).unwrap()) } as *mut c_void;
+        if !data.is_null() {
+            unsafe {
+                std::ptr::write_bytes(data as *mut c_uchar, 0, w_length);
+            }
+            let result = send_usb_control_request(
+                handle,
+                bm_request_type,
+                b_request,
+                w_value,
+                w_index,
+                data,
+                w_length as c_ushort,
+            );
+            unsafe { std::alloc::dealloc(data as *mut u8, std::alloc::Layout::from_size_align(w_length, 1).unwrap()) };
+            result
+        } else {
+            false
+        }
+    }
+}
+
+fn send_usb_control_request(
+    handle: &rusb::DeviceHandle<rusb::Context>,
+    bm_request_type: u8,
+    b_request: u8,
+    w_value: u16,
+    w_index: u16,
+    data: *mut c_void,
+    w_length: c_ushort,
+) -> bool {
+    let ret = unsafe {
+        libusb_control_transfer(
+            handle.as_raw(),
+            bm_request_type,
+            b_request,
+            w_value,
+            w_index,
+            data as *mut c_uchar,
+            w_length,
+            USB_TIMEOUT,
+        )
+    };
+    ret >= 0
+}
+
 fn dfu_check_status(usb_handle: &rusb::DeviceHandle<rusb::Context>, status: u8, state: u8) {
-    let unsafe_handle = usb_handle.as_raw();
     unsafe {
         let mut ret = libusb_control_transfer(
-            unsafe_handle,
+            usb_handle.as_raw(),
             0x21,
             DFU_DNLOAD,
             0,
