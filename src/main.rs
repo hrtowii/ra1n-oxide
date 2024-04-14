@@ -3,9 +3,9 @@ use rusb::{self, DeviceDescriptor, UsbContext};
 use rusty_libimobiledevice::idevice;
 use rusty_libimobiledevice::services::lockdownd;
 use std::ffi::{c_uchar, c_uint, c_ushort, c_void};
-use std::ptr;
+use std::{future, ptr};
 use std::thread::sleep;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio;
 
 // MARK: constants
@@ -294,6 +294,109 @@ fn send_usb_control_request(
     ret >= 0
 }
 
+async fn send_usb_control_request_async(
+    handle: &rusb::DeviceHandle<rusb::Context>,
+    bm_request_type: u8,
+    b_request: u8,
+    w_value: u16,
+    w_index: u16,
+    data: *mut c_void,
+    w_length: c_ushort,
+    usb_abort_timeout: u16,
+) -> bool {
+    
+    let start = Instant::now();
+
+    let result = async {
+        unsafe {
+        libusb_control_transfer(
+            handle.as_raw(),
+            bm_request_type,
+            b_request,
+            w_value,
+            w_index,
+            data as *mut std::os::raw::c_uchar,
+            w_length,
+            usb_abort_timeout.into(),
+        )
+    }
+    }
+    .await;
+
+    let elapsed = start.elapsed();
+    if elapsed >= Duration::from_millis(usb_abort_timeout.into()) {
+        eprintln!("USB control transfer timed out");
+        return false;
+    }
+
+    result >= 0
+}
+
+async fn send_usb_control_request_async_no_data(
+    handle: &rusb::DeviceHandle<rusb::Context>,
+    bm_request_type: u8,
+    b_request: u8,
+    w_value: u16,
+    w_index: u16,
+    w_length: usize,
+    usb_abort_timeout: u16,
+) -> bool {
+    let start = Instant::now();
+
+    if w_length == 0 {
+        let result = async {
+            unsafe {
+            libusb_control_transfer(
+                handle.as_raw(),
+                bm_request_type,
+                b_request,
+                w_value,
+                w_index,
+                std::ptr::null_mut(),
+                0,
+                usb_abort_timeout.into(),
+            )
+        }
+        }
+        .await;
+
+        let elapsed = start.elapsed();
+        if elapsed >= Duration::from_millis(usb_abort_timeout.into()) {
+            eprintln!("USB control transfer timed out");
+            return false;
+        }
+
+        result >= 0
+    } else {
+        let mut data = vec![0u8; w_length];
+        let result = async {
+            unsafe {
+            libusb_control_transfer(
+                handle.as_raw(),
+                bm_request_type,
+                b_request,
+                w_value,
+                w_index,
+                data.as_mut_ptr() as *mut std::os::raw::c_uchar,
+                w_length as c_ushort,
+                usb_abort_timeout.into(),
+            )
+        }
+        }
+        .await;
+
+        let elapsed = start.elapsed();
+        if elapsed >= Duration::from_millis(usb_abort_timeout.into()) {
+            eprintln!("USB control transfer timed out");
+            return false;
+        }
+
+        result >= 0
+    }
+}
+
+// MARK:  sort of dfu stuff?
+
 fn dfu_check_status(usb_handle: &rusb::DeviceHandle<rusb::Context>, status: u8, state: u8) {
     unsafe {
         let mut ret = libusb_control_transfer(
@@ -312,7 +415,6 @@ fn dfu_check_status(usb_handle: &rusb::DeviceHandle<rusb::Context>, status: u8, 
 fn reset_device(usb_handle: &rusb::DeviceHandle<rusb::Context>) {
     println!("Resetting device for checkm8");
     unsafe {
-        println!("Send zlp to end existing trf");
         send_usb_control_request_no_data(
             usb_handle,
             0x21,
@@ -352,6 +454,17 @@ fn reset_device(usb_handle: &rusb::DeviceHandle<rusb::Context>) {
         // Ready
         // return true;
     }
+}
+
+// MARK: stall endpoint, heap fengshui
+//https://habr.com/en/companies/dsec/articles/472762/
+fn stall_usb_request(usb_handle: &rusb::DeviceHandle<rusb::Context>) {
+    send_usb_control_request_no_data(usb_handle, 0x2, DFU_GETSTATUS, 0, 0x80, 0);
+}
+
+fn checkm8_stall(usb_handle: &rusb::DeviceHandle<rusb::Context>) {
+    let usb_abort_timeout = 10;
+    // while (send)
 }
 
 fn heap_fengshui(usb_handle: &rusb::DeviceHandle<rusb::Context>) {
