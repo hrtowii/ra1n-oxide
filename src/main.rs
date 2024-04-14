@@ -311,46 +311,41 @@ fn dfu_check_status(usb_handle: &rusb::DeviceHandle<rusb::Context>, status: u8, 
 
 fn reset_device(usb_handle: &rusb::DeviceHandle<rusb::Context>) {
     println!("Resetting device for checkm8");
-    let unsafe_handle = usb_handle.as_raw();
     unsafe {
         println!("Send zlp to end existing trf");
-        let mut ret = libusb_control_transfer(
-            unsafe_handle,
+        send_usb_control_request_no_data(
+            usb_handle,
             0x21,
             DFU_DNLOAD,
             0,
             0,
-            std::ptr::null_mut(),
             DFU_FILE_SUFFIX_LENGTH.try_into().unwrap(),
-            USB_TIMEOUT,
         );
         // send_usb_control_request_no_data(handle, 0x21, DFU_DNLOAD, 0, 0, DFU_FILE_SUFFIX_LENGTH, &transferRet);
 
         // Send zero length packet to end existing transfer
 
         // Request image validation like we are about to boot it
-        ret = libusb_control_transfer(
-            unsafe_handle,
+        send_usb_control_request_no_data(
+            usb_handle,
             0x21,
             DFU_DNLOAD,
             0,
             0,
-            std::ptr::null_mut(), 
             0, 
-            USB_TIMEOUT, 
         );
         // return send_usb_control_request_no_data(handle, 0x21, DFU_DNLOAD, 0, 0, 0, &transfer_ret)
 
         // Start a new DFU transfer
-        ret = libusb_control_transfer(
-            unsafe_handle,
+        send_usb_control_request_no_data(
+            usb_handle,
             0x21,
             DFU_DNLOAD,
             0,
             0,
-            std::ptr::null_mut(),
-            EP0_MAX_PACKET_SIZE,
-            USB_TIMEOUT,
+            // std::ptr::null_mut(),
+            EP0_MAX_PACKET_SIZE.into(),
+            // USB_TIMEOUT,
         );
         // ret = send_usb_control_request_no_data(handle, 0x21, DFU_DNLOAD, 0, 0, EP0_MAX_PACKET_SIZE, &transferRet);
 
